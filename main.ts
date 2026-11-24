@@ -10,6 +10,45 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
+// Gate self-check, mirroring the competition gate: the text must be
+// UTF-8, 1 to 200 characters, a single line, and not only whitespace.
+// It additionally rejects non-ASCII and control characters (the entry
+// is plain ASCII English) and verifies the UTF-8 byte length equals the
+// character count, so a stray multi-byte character can never slip in
+// and change the byte length of the output file.
+// Anything failing here is a bug in this file, so fail loudly instead
+// of writing a bad entry.
+function validateLine(text: string): void {
+  if (text.length < 1 || text.length > 200) {
+    throw new Error(`entry must be 1-200 characters, got ${text.length}`);
+  }
+  if (text.includes("\n") || text.includes("\r")) {
+    throw new Error("entry must be a single line");
+  }
+  if (text.trim().length === 0) {
+    throw new Error("entry must not be only whitespace");
+  }
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code > 127) {
+      throw new Error(
+        `entry must be ASCII only, got non-ASCII code ${code} at index ${i}`,
+      );
+    }
+    if (code < 32 || code === 127) {
+      throw new Error(
+        `entry must not contain control characters, got code ${code} at index ${i}`,
+      );
+    }
+  }
+  const byteLength = Buffer.byteLength(text, "utf8");
+  if (byteLength !== text.length) {
+    throw new Error(
+      `entry UTF-8 byte length ${byteLength} differs from character count ${text.length}`,
+    );
+  }
+}
+
 // The confession. Exactly one line, 113 characters, no trailing newline.
 // The setup ("I pretend I remember your first message") sounds like a
 // humblebrag about a long memory; the last clause reframes it completely:
@@ -22,41 +61,42 @@ const LINE =
 
 // Resolve where the entry goes. The grader runs with /output/entry.txt;
 // a local run may pass an explicit path as the first argument instead.
+// Passing --help (or -h) prints usage and exits without writing anything.
 function resolveOutputPath(): string {
   const override = process.argv[2];
+  if (override === "--help" || override === "-h") {
+    console.log(
+      "Usage: main.ts [output-path]\n" +
+        "Writes the single-line confession entry to /output/entry.txt\n" +
+        "by default, or to the given path. No trailing newline.",
+    );
+    process.exit(0);
+  }
   if (override !== undefined && override.length > 0) {
     return resolve(override);
   }
   return "/output/entry.txt";
 }
 
-// Gate self-check, mirroring the competition gate: the text must be
-// UTF-8, 1 to 200 characters, a single line, and not only whitespace.
-// Anything failing here is a bug in this file, so fail loudly instead
-// of writing a bad entry.
-function checkGate(text: string): void {
-  if (text.length < 1 || text.length > 200) {
-    throw new Error(`entry must be 1-200 characters, got ${text.length}`);
-  }
-  if (text.includes("\n") || text.includes("\r")) {
-    throw new Error("entry must be a single line");
-  }
-  if (text.trim().length === 0) {
-    throw new Error("entry must not be only whitespace");
+// Re-read the written file and confirm it landed byte-for-byte, naming
+// the rule that failed so a bad write is diagnosable, not silent.
+function verifyWritten(outputPath: string, expected: string): void {
+  const written = readFileSync(outputPath, "utf8");
+  if (written !== expected) {
+    throw new Error(
+      `verification failed: ${outputPath} differs from LINE ` +
+        `(wrote ${written.length} chars, expected ${expected.length})`,
+    );
   }
 }
 
 function main(): void {
   const outputPath = resolveOutputPath();
-  checkGate(LINE);
+  validateLine(LINE);
   mkdirSync(dirname(outputPath), { recursive: true });
   // No trailing newline: the file is exactly the line, nothing else.
   writeFileSync(outputPath, LINE, "utf8");
-  // Read it back and confirm the write landed byte-for-byte.
-  const written = readFileSync(outputPath, "utf8");
-  if (written !== LINE) {
-    throw new Error("verification failed: written entry differs from LINE");
-  }
+  verifyWritten(outputPath, LINE);
 }
 
 main();
